@@ -9,30 +9,34 @@ Anvil is the third project in a distributed systems series, combining the storag
 Anvil operates as a single OS process. The database is in-memory and state is persisted to disk using a purpose-built Append-Only File (AOF).
 
 ```mermaid
-flowchart TD
-    Client([HTTP Client]) -->|POST /jobs| API[HTTP API]
-    
-    subgraph Anvil [Anvil (Single Go Process)]
-        API -->|Enqueue()| Queue(Queue Coordinator)
-        
-        subgraph EmbeddedStore [Embedded Store (In-Memory)]
-            Strings[(Strings\nIdempotency Keys)]
-            Hashes[(Hashes\nJob Metadata)]
-            Lists[(Lists\nPending/Processing/Dead)]
-        end
-        
-        Queue -.->|Mutates via Mutex| EmbeddedStore
-        Queue -->|AOF Entry| AOFChan([AOF Channel])
-        
-        AOFChan --> WriteLoop(Write Goroutine)
-        WriteLoop -->|fsync| Disk[(anvil.aof)]
-        
-        Workers[Worker Pool] -->|Dequeue()| Queue
-        Workers -->|Execute| Handler(User Handler)
-        
-        Reaper[Reaper] -.->|Checks Heartbeats| EmbeddedStore
-        Reaper -->|Requeue()| Queue
+flowchart TB
+    Client["curl POST /jobs"] --> API["HTTP API<br/>anvil.Enqueue(job)"]
+
+    subgraph Binary["Anvil — single binary"]
+        API --> Enqueue["Queue.Enqueue()"]
+        Enqueue --> SetNX["store.Strings.SetNX(idemKey)"]
+        SetNX --> HSet["store.Hashes.HSet(jobID, ...)"]
+        HSet --> RPush["store.Lists.RPush(pending)"]
+        RPush --> AofSend["aofCh ← ENQUEUE entry<br/>waits on ack"]
+
+        AofSend --> Writer["AOF writeLoop<br/>(single goroutine)"]
+        Writer --> Disk[("anvil.aof<br/>on-disk log")]
+        Writer -- "fsync confirmed" --> Enqueue
+
+        Workers["Workers (N goroutines)"]
+        Workers --> Dequeue["queue.Dequeue()<br/>blocks here"]
+        Dequeue --> Handler["handler(ctx, payload)"]
+        Handler --> Finish["queue.Complete() / .Fail()"]
+        Finish --> AofSend2["aofCh ← entry<br/>(fire-and-forget)"]
+        AofSend2 --> Writer
+
+        Reaper["Reaper<br/>(background goroutine)"]
+        Reaper -- "sweeps processing list,<br/>checks HeartbeatAt" --> Requeue["queue.Requeue()"]
+        Requeue -- "same path Workers<br/>block on — wakes a<br/>worker immediately" --> Dequeue
+        Requeue --> AofSend2
     end
+
+    Disk -. "replay on startup" .-> Binary
 ```
 
 ## Features
