@@ -104,7 +104,9 @@ COMPLETE abc-123
 
 Six verbs total. This means the log is compact, fast to replay at startup, and completely decoupled from how the data is stored internally — if we ever change the internals (swap a list for a heap), existing AOF files still replay correctly.
 
-The AOF also needs **compaction**. A completed job leaves three log entries behind that are semantically useless. Periodically, Anvil rewrites the log to contain only the commands needed to reconstruct the current live state — atomically, via a rename-based file swap.
+The AOF also needs **compaction**. A completed job leaves three log entries behind that are semantically useless. Periodically, Anvil rewrites the log to contain only the commands needed to reconstruct the current live state. This is done via a two-step handshake: the background write loop flushes and pauses, a compacted log is written to a temp file and atomically renamed over the old file, and then the write loop resumes on the new file. No entries are ever lost or blocked during the swap.
+
+Additionally, Anvil supports strict durability guarantees. Under the `SyncAlways` policy, when a worker logs an entry, it blocks on a `done` channel until the background write loop explicitly confirms that the fsync has completed on disk.
 
 ---
 
@@ -212,4 +214,4 @@ We built the database. We built the queue that used it. Now we're building the t
 *Source code:*
 - *[Valkyr](https://github.com/lande26/valkyr) — the Redis-compatible storage engine*
 - *[ForgeQueue](https://github.com/lande26/ForgeQueue) — the fault-tolerant distributed job queue*
-- *[Anvil](https://github.com/lande26/Anvil) — the embedded system (in progress)*
+- *[Anvil](https://github.com/lande26/Anvil) — the embedded system*
