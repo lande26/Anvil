@@ -1,0 +1,12 @@
+# Binaries
+bin/
+
+# AOF data directory
+anvil-data/
+
+# OS
+.DS_Store
+
+# Go
+*.test
+*.out
